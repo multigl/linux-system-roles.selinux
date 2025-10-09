@@ -1,6 +1,27 @@
 Changelog
 =========
 
+[1.10.4] - 2025-08-18
+--------------------
+
+### Other Changes
+
+- test: restore selinux config file in proper context (#294)
+
+[1.10.3] - 2025-07-24
+--------------------
+
+### Other Changes
+
+- test: ensure disabled selinux test restores system state (#292)
+
+[1.10.2] - 2025-07-15
+--------------------
+
+### Bug Fixes
+
+- fix: tempdir path not defined in check mode; __selinux_item.path may be undefined (#289)
+
 [1.10.1] - 2025-06-25
 --------------------
 
