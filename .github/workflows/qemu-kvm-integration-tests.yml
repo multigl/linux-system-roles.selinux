@@ -27,9 +27,8 @@ jobs:
           # QEMU
           - { image: "centos-9", env: "qemu-ansible-core-2.16" }
           - { image: "centos-10", env: "qemu-ansible-core-2.17" }
-          # ansible/libdnf5 bug: https://issues.redhat.com/browse/RHELMISC-10110
-          # - { image: "fedora-41", env: "qemu-ansible-core-2.17" }
           - { image: "fedora-42", env: "qemu-ansible-core-2.19" }
+          - { image: "fedora-43", env: "qemu-ansible-core-2.19" }
           - { image: "leap-15.6", env: "qemu-ansible-core-2.18" }
 
           # container
@@ -38,17 +37,18 @@ jobs:
           # broken on non-running dbus
           # - { image: "centos-10", env: "container-ansible-core-2.17" }
           - { image: "centos-10-bootc", env: "container-ansible-core-2.17" }
-          - { image: "fedora-41", env: "container-ansible-core-2.17" }
           - { image: "fedora-42", env: "container-ansible-core-2.17" }
-          - { image: "fedora-41-bootc", env: "container-ansible-core-2.17" }
+          - { image: "fedora-43", env: "container-ansible-core-2.19" }
           - { image: "fedora-42-bootc", env: "container-ansible-core-2.17" }
+          - { image: "fedora-43-bootc", env: "container-ansible-core-2.19" }
 
     env:
       TOX_ARGS: "--skip-tags tests::infiniband,tests::nvme,tests::scsi"
+      ANSIBLE_INJECT_FACT_VARS: "false"
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Check if platform is supported
         id: check_platform
@@ -107,7 +107,7 @@ jobs:
           python3 -m pip install --upgrade pip
           sudo apt update
           sudo apt install -y --no-install-recommends git ansible-core genisoimage qemu-system-x86
-          pip3 install "git+https://github.com/linux-system-roles/tox-lsr@3.12.0"
+          pip3 install "git+https://github.com/linux-system-roles/tox-lsr@3.14.0"
 
       # HACK: Drop this when moving this workflow to 26.04 LTS
       - name: Update podman to 5.x for compatibility with bootc-image-builder's podman 5
@@ -212,7 +212,7 @@ jobs:
 
       - name: Upload test logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: "logs-${{ matrix.scenario.image }}-${{ matrix.scenario.env }}"
           path: |

@@ -25,7 +25,7 @@ jobs:
           sudo apt install -y git
 
       - name: Check out code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - name: Ensure the docs branch
@@ -48,12 +48,12 @@ jobs:
           fi
 
       - name: Checkout the docs branch
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           ref: docs
 
       - name: Fetch README.md and .pandoc_template.html5 template from the workflow branch
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           sparse-checkout: |
             README.md
@@ -91,7 +91,7 @@ jobs:
         run: cp ${{ env.RELEASE_VERSION }}/README.html docs/index.html
 
       - name: Upload README.html as an artifact
-        uses: actions/upload-artifact@master
+        uses: actions/upload-artifact@v6
         with:
           name: README.html
           path: ${{ env.RELEASE_VERSION }}/README.html
