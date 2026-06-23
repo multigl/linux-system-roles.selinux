@@ -18,6 +18,9 @@ permissions:
   statuses: write
 jobs:
   scenario:
+    if: |
+      !((github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[citest_skip]')) ||
+        (github.event_name == 'push' && contains(github.event.head_commit.message, '[citest_skip]')))
     runs-on: ubuntu-latest
 
     strategy:
@@ -25,22 +28,22 @@ jobs:
       matrix:
         scenario:
           # QEMU
-          - { image: "centos-9", env: "qemu-ansible-core-2.16" }
-          - { image: "centos-10", env: "qemu-ansible-core-2.17" }
-          - { image: "fedora-42", env: "qemu-ansible-core-2.19" }
-          - { image: "fedora-43", env: "qemu-ansible-core-2.19" }
-          - { image: "leap-15.6", env: "qemu-ansible-core-2.18" }
+          - { image: "centos-9", env: "qemu-ansible-core-2-16" }
+          - { image: "centos-10", env: "qemu-ansible-core-2-17" }
+          - { image: "fedora-42", env: "qemu-ansible-core-2-19" }
+          - { image: "fedora-43", env: "qemu-ansible-core-2-20" }
+          - { image: "leap-15.6", env: "qemu-ansible-core-2-18" }
 
           # container
-          - { image: "centos-9", env: "container-ansible-core-2.16" }
-          - { image: "centos-9-bootc", env: "container-ansible-core-2.16" }
+          - { image: "centos-9", env: "container-ansible-core-2-16" }
+          - { image: "centos-9-bootc", env: "container-ansible-core-2-16" }
           # broken on non-running dbus
-          # - { image: "centos-10", env: "container-ansible-core-2.17" }
-          - { image: "centos-10-bootc", env: "container-ansible-core-2.17" }
-          - { image: "fedora-42", env: "container-ansible-core-2.17" }
-          - { image: "fedora-43", env: "container-ansible-core-2.19" }
-          - { image: "fedora-42-bootc", env: "container-ansible-core-2.17" }
-          - { image: "fedora-43-bootc", env: "container-ansible-core-2.19" }
+          # - { image: "centos-10", env: "container-ansible-core-2-17" }
+          - { image: "centos-10-bootc", env: "container-ansible-core-2-17" }
+          - { image: "fedora-42", env: "container-ansible-core-2-17" }
+          - { image: "fedora-43", env: "container-ansible-core-2-20" }
+          - { image: "fedora-42-bootc", env: "container-ansible-core-2-17" }
+          - { image: "fedora-43-bootc", env: "container-ansible-core-2-20" }
 
     env:
       TOX_ARGS: "--skip-tags tests::infiniband,tests::nvme,tests::scsi"
@@ -72,7 +75,7 @@ jobs:
 
           # bootc build support (in buildah) has a separate flag
           if [ "${{ matrix.scenario.image }}" != "$image" ]; then
-          if ! yq -e '.galaxy_info.galaxy_tags[] | select(. == "containerbuild")' meta/main.yml; then
+            if ! yq -e '.galaxy_info.galaxy_tags[] | select(. == "containerbuild")' meta/main.yml; then
               supported=
             fi
           else
@@ -107,7 +110,7 @@ jobs:
           python3 -m pip install --upgrade pip
           sudo apt update
           sudo apt install -y --no-install-recommends git ansible-core genisoimage qemu-system-x86
-          pip3 install "git+https://github.com/linux-system-roles/tox-lsr@3.14.0"
+          pip3 install "git+https://github.com/linux-system-roles/tox-lsr@3.18.1"
 
       # HACK: Drop this when moving this workflow to 26.04 LTS
       - name: Update podman to 5.x for compatibility with bootc-image-builder's podman 5
@@ -172,10 +175,9 @@ jobs:
         if: steps.check_platform.outputs.supported && startsWith(matrix.scenario.env, 'container')
         run: |
           set -euo pipefail
-          # HACK: debug.py/profile.py setup is broken
-          export LSR_CONTAINER_PROFILE=false
-          export LSR_CONTAINER_PRETTY=false
           rc=0
+          # we cannot skip these on the first test
+          export SKIP_REQUIREMENTS=false
           for t in tests/tests_*.yml; do
               if tox -e ${{ matrix.scenario.env }} -- --image-name ${{ matrix.scenario.image }} $t > ${t}.log 2>&1; then
                   echo "PASS: $(basename $t)"
@@ -185,6 +187,8 @@ jobs:
                   mv "${t}.log" "${t}-FAIL.log"
                   rc=1
               fi
+              # we can skip these on subsequent runs
+              export SKIP_REQUIREMENTS=true
           done
           exit $rc
 
@@ -212,7 +216,7 @@ jobs:
 
       - name: Upload test logs on failure
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: "logs-${{ matrix.scenario.image }}-${{ matrix.scenario.env }}"
           path: |

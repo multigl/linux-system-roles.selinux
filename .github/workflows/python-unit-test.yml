@@ -16,6 +16,9 @@ permissions:
   contents: read
 jobs:
   python:
+    if: |
+      !((github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[citest_skip]')) ||
+        (github.event_name == 'push' && contains(github.event.head_commit.message, '[citest_skip]')))
     strategy:
       matrix:
         pyver_os:
@@ -67,7 +70,7 @@ jobs:
             tox=tox
             virtualenv=virtualenv
           fi
-          pip install "$tox" "$virtualenv" "git+https://github.com/linux-system-roles/tox-lsr@3.14.0"
+          pip install "$tox" "$virtualenv" "git+https://github.com/linux-system-roles/tox-lsr@3.18.1"
           # If you have additional OS dependency packages e.g. libcairo2-dev
           # then put them in .github/config/ubuntu-requirements.txt, one
           # package per line.
@@ -89,4 +92,4 @@ jobs:
           TOXENV="$toxenvs" lsr_ci_runtox
 
       - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6

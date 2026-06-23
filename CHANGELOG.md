@@ -1,6 +1,64 @@
 Changelog
 =========
 
+[1.12.1] - 2026-05-07
+--------------------
+
+### Bug Fixes
+
+- fix: add verbosity-based no_log to facts modules (#348)
+
+### Other Changes
+
+- ci: bump actions/github-script from 8 to 9 (#347)
+
+[1.12.0] - 2026-04-28
+--------------------
+
+### New Features
+
+- feat: add role fingerprints to syslog (#345)
+
+### Other Changes
+
+- ci: bump actions/upload-artifact from 6 to 7 (#334)
+- ci: tox-lsr 3.17.0 - container test improvements, use ansible 2.20 for fedora 43 [citest_skip] (#336)
+- ci: tox-lsr 3.17.1 - previous update broke container tests, this fixes them [citest_skip] (#337)
+- test: ensure role gathers the facts it uses by having test clear_facts before include_role (#338)
+- ci: fix yum repos to use devel site instead of old site name [citest_skip] (#340)
+- ci: use codecov @v6 [citest_skip] (#341)
+- ci: update header for run_role_with_clear_facts [citest_skip] (#342)
+- ci: Comply with Ansible partner certification checking [citest_skip] (#343)
+- ci: ansible-lint requires dependencies to be installed [citest_skip] (#344)
+
+[1.11.1] - 2026-02-18
+--------------------
+
+### Bug Fixes
+
+- fix: when does not prevent template expansion in name with import_role (#331)
+
+### Other Changes
+
+- ci: tox-lsr version 3.15.0 [citest_skip] (#328)
+- ci: Add Fedora 43, remove Fedora 41 from Testing Farm CI (#329)
+- ci: Ansible version must be string, not float [citest_skip] (#332)
+
+[1.11.0] - 2026-02-09
+--------------------
+
+### New Features
+
+- feat: Add support for DCCP and SCTP protocols to selinux_port (#325)
+
+### Other Changes
+
+- ci: use ANSIBLE_INJECT_FACT_VARS=false by default for testing (#319)
+- ci: bump ansible/ansible-lint from 25 to 26 (#321)
+- ci: skip most CI checks if title contains citest skip [citest_skip] (#322)
+- ci: ansible-lint - remove .collection directory from converted collection [citest_skip] (#323)
+- test: ensure dccp and sctp tests fails properly on el7 (#326)
+
 [1.10.6] - 2026-01-06
 --------------------
 

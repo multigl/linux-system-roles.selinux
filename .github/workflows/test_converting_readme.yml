@@ -15,6 +15,9 @@ permissions:
   contents: read
 jobs:
   test_converting_readme:
+    if: |
+      !((github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[citest_skip]')) ||
+        (github.event_name == 'push' && contains(github.event.head_commit.message, '[citest_skip]')))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -40,7 +43,7 @@ jobs:
             --output README.html README.md
 
       - name: Upload README.html as an artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: README.html
           path: README.html

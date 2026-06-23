@@ -166,6 +166,7 @@
 
 - name: Get SELinux modules facts
   selinux_modules_facts:
+  no_log: "{{ ansible_verbosity < 2 }}"
 
 # This is a workaround to set the SELinux modules facts after the selinux_modules_facts module is executed
 # because with newer version of Ansible facts are no longer set as variables
@@ -174,6 +175,7 @@
     selinux_installed_modules: "{{ ansible_facts['selinux_installed_modules'] }}"
     selinux_priorities: "{{ ansible_facts['selinux_priorities'] }}"
     selinux_checksums: "{{ ansible_facts['selinux_checksums'] }}"
+    __selinux_modules_needs_reload: false
 
 - name: Load SELinux modules
   include_tasks: selinux_load_module.yml
@@ -189,6 +191,13 @@
   loop: "{{ selinux_modules | flatten(levels=1) }}"
   loop_control:
     loop_var: __selinux_item
+
+- name: Reload SELinux policy if modules need to be reloaded
+  command: semodule -R
+  when:
+    - __selinux_modules_needs_reload
+    - ansible_facts['selinux']['status'] != "disabled"
+  changed_when: true
 
 - name: Restore SELinux labels on filesystem tree
   command: /sbin/restorecon -R -F -v {{ restorecon_threads }} {{ __selinux_item }}
@@ -207,3 +216,9 @@
   changed_when: '"Would relabel" in restorecon_cmd.stdout'
   check_mode: false
   when: ansible_check_mode
+
+- name: Record role success fingerprint
+  sr_fingerprint:
+    sr_message: >-
+      success system_role:selinux ansible_version={{ ansible_version.full }}
+      {{ ansible_facts['distribution'] }}-{{ ansible_facts['distribution_version'] }}
