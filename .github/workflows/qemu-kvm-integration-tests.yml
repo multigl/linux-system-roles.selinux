@@ -1,26 +1,21 @@
 ---
 name: Test
 on:  # yamllint disable-line rule:truthy
-  pull_request:
-  merge_group:
-    branches:
-      - main
-    types:
-      - checks_requested
-  push:
-    branches:
-      - main
-  workflow_dispatch:
+  workflow_call:
+    inputs:
+      requested:
+        description: Run this workflow for an authorized /citest command
+        required: true
+        type: boolean
 
 permissions:
   contents: read
+  pull-requests: read
   # This is required for the ability to create/update the Pull request status
   statuses: write
 jobs:
   scenario:
-    if: |
-      !((github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[citest_skip]')) ||
-        (github.event_name == 'push' && contains(github.event.head_commit.message, '[citest_skip]')))
+    if: inputs.requested || github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
 
     strategy:
@@ -30,9 +25,10 @@ jobs:
           # QEMU
           - { image: "centos-9", env: "qemu-ansible-core-2-16" }
           - { image: "centos-10", env: "qemu-ansible-core-2-17" }
-          - { image: "fedora-42", env: "qemu-ansible-core-2-19" }
           - { image: "fedora-43", env: "qemu-ansible-core-2-20" }
+          - { image: "fedora-44", env: "qemu-ansible-core-2-21" }
           - { image: "leap-15.6", env: "qemu-ansible-core-2-18" }
+          - { image: "leap-16.0", env: "qemu-ansible-core-2-20" }
 
           # container
           - { image: "centos-9", env: "container-ansible-core-2-16" }
@@ -40,18 +36,46 @@ jobs:
           # broken on non-running dbus
           # - { image: "centos-10", env: "container-ansible-core-2-17" }
           - { image: "centos-10-bootc", env: "container-ansible-core-2-17" }
-          - { image: "fedora-42", env: "container-ansible-core-2-17" }
           - { image: "fedora-43", env: "container-ansible-core-2-20" }
-          - { image: "fedora-42-bootc", env: "container-ansible-core-2-17" }
+          - { image: "fedora-44", env: "container-ansible-core-2-21" }
           - { image: "fedora-43-bootc", env: "container-ansible-core-2-20" }
+          # ansible-core 2.21 cannot enable services using service module in bootc images
+          - { image: "fedora-44-bootc", env: "container-ansible-core-2-20" }
 
     env:
       TOX_ARGS: "--skip-tags tests::infiniband,tests::nvme,tests::scsi"
       ANSIBLE_INJECT_FACT_VARS: "false"
 
     steps:
+      - name: Get PR head SHA and context
+        if: github.event_name == 'issue_comment'
+        id: head_sha_context
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          CONTEXT: "${{ github.workflow }} / scenario (${{ matrix.scenario.image }}, ${{ matrix.scenario.env }}) (pull_request)"
+        run: |
+          set -euxo pipefail
+          head_sha=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.sha')
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          echo "context=$CONTEXT" >> "$GITHUB_OUTPUT"
+
+      - name: Set commit status as pending
+        if: github.event_name == 'issue_comment'
+        uses: myrotvorets/set-commit-status-action@7f84e174036426c90737dbfa32e9fd56859f93d0  # master
+        with:
+          sha: ${{ steps.head_sha_context.outputs.head_sha }}
+          status: pending
+          context: ${{ steps.head_sha_context.outputs.context }}
+          description: Test started
+          targetUrl: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/job/${{ job.check_run_id }}
+
       - name: Checkout repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ steps.head_sha_context.outputs.head_sha || github.sha }}
 
       - name: Check if platform is supported
         id: check_platform
@@ -66,7 +90,7 @@ jobs:
           case "$image" in
           centos-*) platform=el; platform_version=el"${image#centos-}" ;;
           fedora-*) platform=fedora; platform_version="${image/-/}" ;;
-          leap-*) platform=leap; platform_version="${image}" ;;
+          leap-*) platform=leap; platform_version="${image%%.*}"; platform_version="${platform_version/-/}" ;;
           esac
           supported=
           if yq -e '.galaxy_info.galaxy_tags[] | select(. == "'${platform_version}'" or . == "'${platform}'")' meta/main.yml; then
@@ -109,30 +133,25 @@ jobs:
           set -euxo pipefail
           python3 -m pip install --upgrade pip
           sudo apt update
-          sudo apt install -y --no-install-recommends git ansible-core genisoimage qemu-system-x86
-          pip3 install "git+https://github.com/linux-system-roles/tox-lsr@3.18.1"
+          sudo apt install -y --no-install-recommends git ansible-core genisoimage qemu-system-x86 qemu-utils
+          pip3 install "git+https://github.com/linux-system-roles/tox-lsr@bfd11b23a1ed56388ea7ab8263d30e3172553a7c"
 
-      # HACK: Drop this when moving this workflow to 26.04 LTS
-      - name: Update podman to 5.x for compatibility with bootc-image-builder's podman 5
-        if: steps.check_platform.outputs.supported && endsWith(matrix.scenario.image, '-bootc')
+      - name: Check for podman version 5 or higher
+        id: check_podman_version
+        if: steps.check_platform.outputs.supported
         run: |
-          sed 's/noble/plucky/g' /etc/apt/sources.list.d/ubuntu.sources | sudo tee /etc/apt/sources.list.d/plucky.sources >/dev/null
-          cat <<EOF | sudo tee /etc/apt/preferences.d/podman.pref >/dev/null
-          Package: podman buildah golang-github-containers-common crun libgpgme11t64 libgpg-error0 golang-github-containers-image catatonit conmon containers-storage
-          Pin: release n=plucky
-          Pin-Priority: 991
+          podman_version=$(podman version -f '{{.Client.Version}}')
+          podman_major_version="${podman_version%%.*}"
+          echo "Podman version: $podman_version"
+          if [ "$podman_major_version" -lt 5 ]; then
+            echo "need_podman_update=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "need_podman_update=0" >> "$GITHUB_OUTPUT"
+          fi
 
-          Package: libsubid4 netavark passt aardvark-dns containernetworking-plugins libslirp0 slirp4netns
-          Pin: release n=plucky
-          Pin-Priority: 991
-
-          Package: *
-          Pin: release n=plucky
-          Pin-Priority: 400
-          EOF
-
-          sudo apt update
-          sudo apt install -y podman crun conmon containers-storage
+      - name: Ensure use of podman 5
+        if: steps.check_platform.outputs.supported && steps.check_podman_version.outputs.need_podman_update == 1
+        uses: redhat-actions/podman-install@5b0fb16319979de14e2c7c2c1cc27c98f107ae52  # main
 
       - name: Configure tox-lsr
         if: steps.check_platform.outputs.supported
@@ -216,7 +235,7 @@ jobs:
 
       - name: Upload test logs on failure
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: "logs-${{ matrix.scenario.image }}-${{ matrix.scenario.env }}"
           path: |
@@ -240,11 +259,22 @@ jobs:
           done
           "${cmdline[@]}"
 
-      - name: Set commit status as success with a description that platform is skipped
-        if: ${{ steps.check_platform.outputs.supported == '' }}
-        uses: myrotvorets/set-commit-status-action@master
+      - name: Set final commit status
+        if: always() && github.event_name == 'issue_comment' && steps.head_sha_context.outputs.head_sha != '' && (steps.check_platform.outputs.supported || failure())
+        uses: myrotvorets/set-commit-status-action@7f84e174036426c90737dbfa32e9fd56859f93d0  # master
         with:
+          sha: ${{ steps.head_sha_context.outputs.head_sha }}
+          status: ${{ job.status }}
+          context: ${{ steps.head_sha_context.outputs.context }}
+          description: Test finished
+          targetUrl: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/job/${{ job.check_run_id }}
+
+      - name: Set commit status as success with a description that platform is skipped
+        if: ${{ success() && github.event_name == 'issue_comment' && steps.check_platform.outputs.supported == '' }}
+        uses: myrotvorets/set-commit-status-action@7f84e174036426c90737dbfa32e9fd56859f93d0  # master
+        with:
+          sha: ${{ steps.head_sha_context.outputs.head_sha }}
           status: success
-          context: "${{ github.workflow }} / scenario (${{ matrix.scenario.image }}, ${{ matrix.scenario.env }}) (pull_request)"
+          context: ${{ steps.head_sha_context.outputs.context }}
           description: The role does not support this platform. Skipping.
-          targetUrl: ""
+          targetUrl: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/job/${{ job.check_run_id }}

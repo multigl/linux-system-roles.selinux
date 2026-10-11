@@ -1,11 +1,22 @@
 ---
 name: Run integration tests in Testing Farm
 on:
-  issue_comment:
-    types:
-      - created
+  workflow_call:
+    inputs:
+      requested:
+        description: Run this workflow for an authorized /citest command
+        required: true
+        type: boolean
+    secrets:
+      SR_LSR_DOMAIN:
+        required: true
+      SR_LSR_SSH_KEY:
+        required: true
+      TF_API_KEY_RH:
+        required: true
 permissions:
   contents: read
+  pull-requests: read
   # This is required for the ability to create/update the Pull request status
   statuses: write
 jobs:
@@ -13,45 +24,42 @@ jobs:
     name: Get info from role and PR to determine if and how to test
     # The concurrency key is used to prevent multiple workflows from running at the same time
     concurrency:
-      # group name contains reponame-pr_num to allow simualteneous runs in different PRs
-      group: testing-farm-${{ github.event.repository.name }}-${{ github.event.issue.number }}
+      # group name contains reponame-pr_num to allow simultaneous runs in different PRs
+      group: testing-farm-${{ github.event.repository.name }}-${{ github.event.issue.number || github.event.number }}
       cancel-in-progress: true
     # Let's schedule tests only on user request. NOT automatically.
     # Only repository owner or member can schedule tests
-    if: |
-      github.event.issue.pull_request
-      && contains(github.event.comment.body, '[citest]')
-      && (contains(fromJson('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
-      || contains('systemroller', github.event.comment.user.login))
+    if: inputs.requested || github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
     outputs:
       supported_platforms: ${{ steps.supported_platforms.outputs.supported_platforms }}
-      head_sha: ${{ steps.head_sha.outputs.head_sha }}
+      head_sha: ${{ steps.head_sha.outputs.head_sha || github.sha }}
       memory: ${{ steps.memory.outputs.memory }}
     steps:
       - name: Dump github context
+        if: env.SR_DEBUG == 'true'
         run:   echo "$GITHUB_CONTEXT"
         shell: bash
         env:
           GITHUB_CONTEXT: ${{ toJson(github) }}
-
-      - name: Checkout repo
-        uses: actions/checkout@v6
+          SR_DEBUG: 'false'  # set to true to debug
 
       - name: Get head sha of the PR
+        if: github.event_name == 'issue_comment'
         id: head_sha
         run: |
           head_sha=$(gh api "repos/$REPO/pulls/$PR_NO" --jq '.head.sha')
           echo "head_sha=$head_sha" >> $GITHUB_OUTPUT
         env:
           REPO: ${{ github.repository }}
-          PR_NO: ${{ github.event.issue.number }}
+          PR_NO: ${{ github.event.issue.number || github.event.number }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Checkout PR
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ steps.head_sha.outputs.head_sha }}
+          persist-credentials: false
+          ref: ${{ steps.head_sha.outputs.head_sha || github.sha }}
 
       - name: Get memory
         id: memory
@@ -72,8 +80,8 @@ jobs:
           meta_main=meta/main.yml
           # All Fedora are supported, add latest Fedora versions to supported_platforms
           if yq '.galaxy_info.galaxy_tags[]' "$meta_main" | grep -qi fedora$; then
-            supported_platforms+=" Fedora-42"
             supported_platforms+=" Fedora-43"
+            supported_platforms+=" Fedora-44"
           fi
           # Specific Fedora versions supported
           if yq '.galaxy_info.galaxy_tags[]' "$meta_main" | grep -qiP 'fedora\d+$'; then
@@ -99,10 +107,10 @@ jobs:
       matrix:
         include:
           # Ensure ansible version is a string!
-          - platform: Fedora-42
-            ansible_version: "2.19"
           - platform: Fedora-43
             ansible_version: "2.20"
+          - platform: Fedora-44
+            ansible_version: "2.21"
           - platform: CentOS-7-latest
             ansible_version: "2.9"
           - platform: CentOS-Stream-8
@@ -116,16 +124,38 @@ jobs:
             ansible_version: "2.17"
     runs-on: ubuntu-latest
     env:
-      ARTIFACTS_DIR_NAME: "tf_${{ github.event.repository.name }}-${{ github.event.issue.number }}_\
+      ARTIFACTS_DIR_NAME: "tf_${{ github.event.repository.name }}-${{ github.event.issue.number || github.event.number }}_\
         ${{ matrix.platform }}-${{ matrix.ansible_version }}_\
         ${{ needs.prepare_vars.outputs.datetime }}/artifacts"
       ARTIFACT_TARGET_DIR: /srv/pub/alt/${{ vars.SR_LSR_USER }}/logs
     steps:
+      # the head_sha isn't really needed to be set here, we could
+      # just use the prepare_vars output, but this makes the workflow
+      # consistent with the other issue comment workflows.
+      - name: Get PR head SHA and context
+        id: head_sha_context
+        env:
+          HEAD_SHA: ${{ needs.prepare_vars.outputs.head_sha }}
+          CONTEXT: ${{ matrix.platform }}|ansible-${{ matrix.ansible_version }}
+        run: |
+          echo "head_sha=$HEAD_SHA" >> $GITHUB_OUTPUT
+          echo "context=$CONTEXT" >> $GITHUB_OUTPUT
+
+      - name: Set commit status as pending
+        if: contains(needs.prepare_vars.outputs.supported_platforms, matrix.platform)
+        uses: myrotvorets/set-commit-status-action@7f84e174036426c90737dbfa32e9fd56859f93d0  # master
+        with:
+          sha: ${{ steps.head_sha_context.outputs.head_sha }}
+          status: pending
+          context: ${{ steps.head_sha_context.outputs.context }}
+          description: Test started
+          targetUrl: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/job/${{ job.check_run_id }}
+
       - name: Set variables with DATETIME and artifact location
         id: set_vars
         run: |
           printf -v DATETIME '%(%Y%m%d-%H%M%S)T' -1
-          ARTIFACTS_DIR_NAME="tf_${{ github.event.repository.name }}-${{ github.event.issue.number }}_\
+          ARTIFACTS_DIR_NAME="tf_${{ github.event.repository.name }}-${{ github.event.issue.number || github.event.number }}_\
           ${{ matrix.platform }}-${{ matrix.ansible_version }}_$DATETIME/artifacts"
           ARTIFACTS_TARGET_DIR=/srv/pub/alt/${{ vars.SR_LSR_USER }}/logs
           ARTIFACTS_DIR=$ARTIFACTS_TARGET_DIR/$ARTIFACTS_DIR_NAME
@@ -134,28 +164,18 @@ jobs:
           echo "ARTIFACTS_DIR=$ARTIFACTS_DIR" >> $GITHUB_OUTPUT
           echo "ARTIFACTS_URL=$ARTIFACTS_URL" >> $GITHUB_OUTPUT
 
-      - name: Set commit status as pending
-        if: contains(needs.prepare_vars.outputs.supported_platforms, matrix.platform)
-        uses: myrotvorets/set-commit-status-action@master
-        with:
-          sha: ${{ needs.prepare_vars.outputs.head_sha }}
-          status: pending
-          context: ${{ matrix.platform }}|ansible-${{ matrix.ansible_version }}
-          description: Test started
-          targetUrl: ""
-
       - name: Set commit status as success with a description that platform is skipped
         if: "!contains(needs.prepare_vars.outputs.supported_platforms, matrix.platform)"
-        uses: myrotvorets/set-commit-status-action@master
+        uses: myrotvorets/set-commit-status-action@7f84e174036426c90737dbfa32e9fd56859f93d0  # master
         with:
-          sha: ${{ needs.prepare_vars.outputs.head_sha }}
+          sha: ${{ steps.head_sha_context.outputs.head_sha }}
           status: success
-          context: ${{ matrix.platform }}|ansible-${{ matrix.ansible_version }}
+          context: ${{ steps.head_sha_context.outputs.context }}
           description: The role does not support this platform. Skipping.
-          targetUrl: ""
+          targetUrl: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/job/${{ job.check_run_id }}
 
       - name: Run test in testing farm
-        uses: sclorg/testing-farm-as-github-action@v4
+        uses: sclorg/testing-farm-as-github-action@230555baceb860aa468d216f1822974836b965d1  # v4.3.1
         if: contains(needs.prepare_vars.outputs.supported_platforms, matrix.platform)
         with:
           git_ref: main
@@ -165,7 +185,7 @@ jobs:
           variables: "SR_ANSIBLE_VER=${{ matrix.ansible_version }};\
             SR_REPO_NAME=${{ github.event.repository.name }};\
             SR_GITHUB_ORG=${{ github.repository_owner }};\
-            SR_PR_NUM=${{ github.event.issue.number }};\
+            SR_PR_NUM=${{ github.event.issue.number || github.event.number }};\
             SR_ARTIFACTS_DIR=${{ steps.set_vars.outputs.ARTIFACTS_DIR }};\
             SR_TEST_LOCAL_CHANGES=false;\
             SR_LSR_USER=${{ vars.SR_LSR_USER }};\
@@ -184,11 +204,11 @@ jobs:
           tmt_plan_filter: "tag:playbooks_parallel,selinux"
 
       - name: Set final commit status
-        uses: myrotvorets/set-commit-status-action@master
+        uses: myrotvorets/set-commit-status-action@7f84e174036426c90737dbfa32e9fd56859f93d0  # master
         if: always() && contains(needs.prepare_vars.outputs.supported_platforms, matrix.platform)
         with:
-          sha: ${{ needs.prepare_vars.outputs.head_sha }}
+          sha: ${{ steps.head_sha_context.outputs.head_sha }}
           status: ${{ job.status }}
-          context: ${{ matrix.platform }}|ansible-${{ matrix.ansible_version }}
+          context: ${{ steps.head_sha_context.outputs.context }}
           description: Test finished
           targetUrl: ${{ steps.set_vars.outputs.ARTIFACTS_URL }}
